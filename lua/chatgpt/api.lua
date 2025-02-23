@@ -16,52 +16,47 @@ function Api.chat_completions(custom_params, cb, should_stop)
   local params = vim.tbl_extend("keep", custom_params, openai_params)
   -- the custom params contains <dynamic> if model is not constant but function
   -- therefore, use collapsed openai params (with function evaluated to get model) if that is the case
-  if params.model == "<dynamic>" then
-    params.model = openai_params.model
-  end
-  local stream = params.stream or false
-  if stream then
-    local raw_chunks = ""
-    local state = "START"
+  local raw_chunks = ""
+  local state = "START"
 
-    cb = vim.schedule_wrap(cb)
+  cb = vim.schedule_wrap(cb)
 
-    local extra_curl_params = Config.options.extra_curl_params
-    local args = {
-      "--silent",
-      "--show-error",
-      "--no-buffer",
-      Api.CHAT_COMPLETIONS_URL,
-      "-H",
-      "Content-Type: application/json",
-      "-H",
-      Api.AUTHORIZATION_HEADER,
-      "-d",
-      vim.json.encode(params),
-    }
+  local extra_curl_params = Config.options.extra_curl_params
+  local args = {
+    Api.OPENAI_API_HOST.."/infer",
+    "-H", "accept: */*",
+    "-H", "accept-language: en-US,en;q=0.9",
+    "-H", "Content-Type: application/json",
+    "-H", "user-agent: " ..Api.USER_AGENT,
+    -- "-d", vim.json.encode(params),
+    "--data-raw", '{"question":"what are the latest advancements in Java?","options":{"date":"03/07/2024","language":"en-US","detailed":true,"anonUserId":"k1sl6bq45o285wmikabg8bff","answerModel":"Phind Instant","searchMode":"auto","allowMultiSearch":false,"customLinks":[]},"context":"","backend_token":"qrLQuyEMJVQXPzhf3dGu+0QOfI8oMjOtvSJ5QysHPe38mjTU69Nb8ZnNqdLB3Iyk4p1WnFEqPg==","challenge":-0.692499201726473}'
+  }
 
-    if extra_curl_params ~= nil then
-      for _, param in ipairs(extra_curl_params) do
-        table.insert(args, param)
-      end
+  if extra_curl_params ~= nil then
+    for _, param in ipairs(extra_curl_params) do
+      table.insert(args, param)
     end
+  end
 
-    Api.exec(
-      "curl",
-      args,
-      function(chunk)
-        local ok, json = pcall(vim.json.decode, chunk)
-        if ok and json ~= nil then
-          if json.error ~= nil then
-            cb(json.error.message, "ERROR")
-            return
-          end
+  Api.exec(
+    "curl",
+    args,
+    function(chunk)
+      local ok, json = pcall(vim.json.decode, chunk)
+      if ok and json ~= nil then
+        if json.error ~= nil then
+          cb(json.error.message, "ERROR")
+          return
         end
-        for line in chunk:gmatch("[^\n]+") do
-          local raw_json = string.gsub(line, "^data: ", "")
-          if raw_json == "[DONE]" then
+      end
+      for line in chunk:gmatch("[^\n]+") do
+        local phind_tag = string.gsub(line, "^data: ", "")
+        if phind_tag then
+          if string.find(line, 'PHIND_DONE') then
             cb(raw_chunks, "END")
-          else
+          end
+          local raw_json = string.match(phind_tag, ">".."(.-)".."<")
+          if raw_json then
             ok, json = pcall(vim.json.decode, raw_json, {
               luanil = {
                 object = true,
@@ -69,32 +64,23 @@ function Api.chat_completions(custom_params, cb, should_stop)
               },
             })
             if ok and json ~= nil then
-              if
-                json
-                and json.choices
-                and json.choices[1]
-                and json.choices[1].delta
-                and json.choices[1].delta.content
-              then
-                cb(json.choices[1].delta.content, state)
-                raw_chunks = raw_chunks .. json.choices[1].delta.content
-                state = "CONTINUE"
-              end
+              -- this will be the metadata returned from the phind api
             end
+          else
+            -- this will be the actual answer!
+            cb(raw_json, state)
           end
         end
-      end,
-      function(err, _)
-        cb(err, "ERROR")
-      end,
-      should_stop,
-      function()
-        cb(raw_chunks, "END")
       end
-    )
-  else
-    Api.make_call(Api.CHAT_COMPLETIONS_URL, params, cb)
-  end
+    end,
+    function(err, _)
+      cb(err, "ERROR")
+    end,
+    should_stop,
+    function()
+      cb(raw_chunks, "END")
+    end
+  )
 end
 
 function Api.edits(custom_params, cb)
@@ -111,23 +97,26 @@ end
 
 function Api.make_call(url, params, cb)
   TMP_MSG_FILENAME = os.tmpname()
-  local f = io.open(TMP_MSG_FILENAME, "w+")
+  --[[local f = io.open(TMP_MSG_FILENAME, "w+")
   if f == nil then
     vim.notify("Cannot open temporary message file: " .. TMP_MSG_FILENAME, vim.log.levels.ERROR)
     return
   end
   f:write(vim.fn.json_encode(params))
-  f:close()
+  f:close() ]]
+
+  local state = "START"
 
   local args = {
     url,
-    "-H",
-    "Content-Type: application/json",
-    "-H",
-    Api.AUTHORIZATION_HEADER,
-    "-d",
-    "@" .. TMP_MSG_FILENAME,
+    "-H", "accept */*",
+    "-H", "accept-language: en-US,en;q=0.9",
+    "-H", "Content-Type: application/json",
+    "-H", "user-agent: " ..Api.USER_AGENT,
+    --"-d", "@" .. TMP_MSG_FILENAME,
+    "--data-raw", '{"question":"what are the latest advancements in Java?","options":{"date":"03/07/2024","language":"en-US","detailed":true,"anonUserId":"k1sl6bq45o285wmikabg8bff","answerModel":"Phind Instant","searchMode":"auto","allowMultiSearch":false,"customLinks":[]},"context":"","backend_token":"qrLQuyEMJVQXPzhf3dGu+0QOfI8oMjOtvSJ5QysHPe38mjTU69Nb8ZnNqdLB3Iyk4p1WnFEqPg==","challenge":-0.692499201726473}'
   }
+  print(vim.inspect(args))
 
   local extra_curl_params = Config.options.extra_curl_params
   if extra_curl_params ~= nil then
@@ -136,7 +125,9 @@ function Api.make_call(url, params, cb)
     end
   end
 
-  Api.job = job
+  local raw_chunks = ""
+
+  --[[ Api.job = job
     :new({
       command = "curl",
       args = args,
@@ -144,7 +135,50 @@ function Api.make_call(url, params, cb)
         Api.handle_response(response, exit_code, cb)
       end),
     })
-    :start()
+    :start() ]]
+  Api.exec(
+    "curl",
+    args,
+    function(chunk)
+      local ok, json = pcall(vim.json.decode, chunk)
+      if ok and json ~= nil then
+        if json.error ~= nil then
+          cb(json.error.message, "ERROR")
+          return
+        end
+      end
+      for line in chunk:gmatch("[^\n]+") do
+        local phind_tag = string.gsub(line, "^data: ", "")
+        if phind_tag then
+          if string.find(line, 'PHIND_DONE') then
+            cb(raw_chunks, "END")
+          end
+          local raw_json = string.match(phind_tag, ">".."(.-)".."<")
+          if raw_json then
+            ok, json = pcall(vim.json.decode, raw_json, {
+              luanil = {
+                object = true,
+                array = true,
+              },
+            })
+            if ok and json ~= nil then
+              -- this will be the metadata returned from the phind api
+            end
+          else
+            -- this will be the actual answer!
+            cb(raw_json, state)
+          end
+        end
+      end
+    end,
+    function(err, _)
+      cb(err, "ERROR")
+    end,
+    --should_stop,
+    function()
+      cb(raw_chunks, "END")
+    end
+  )
 end
 
 Api.handle_response = vim.schedule_wrap(function(response, exit_code, cb)
@@ -192,36 +226,6 @@ function Api.close()
   end
 end
 
-local splitCommandIntoTable = function(command)
-  local cmd = {}
-  for word in command:gmatch("%S+") do
-    table.insert(cmd, word)
-  end
-  return cmd
-end
-
-local function loadConfigFromCommand(command, optionName, callback, defaultValue)
-  local cmd = splitCommandIntoTable(command)
-  job
-    :new({
-      command = cmd[1],
-      args = vim.list_slice(cmd, 2, #cmd),
-      on_exit = function(j, exit_code)
-        if exit_code ~= 0 then
-          logger.warn("Config '" .. optionName .. "' did not return a value when executed")
-          return
-        end
-        local value = j:result()[1]:gsub("%s+$", "")
-        if value ~= nil and value ~= "" then
-          callback(value)
-        elseif defaultValue ~= nil and defaultValue ~= "" then
-          callback(defaultValue)
-        end
-      end,
-    })
-    :start()
-end
-
 local function loadConfigFromEnv(envName, configName, callback)
   local variable = os.getenv(envName)
   if not variable then
@@ -234,94 +238,14 @@ local function loadConfigFromEnv(envName, configName, callback)
   end
 end
 
-local function loadOptionalConfig(envName, configName, optionName, callback, defaultValue)
-  loadConfigFromEnv(envName, configName)
-  if Api[configName] then
-    callback(Api[configName])
-  elseif Config.options[optionName] ~= nil and Config.options[optionName] ~= "" then
-    loadConfigFromCommand(Config.options[optionName], optionName, callback, defaultValue)
-  else
-    callback(defaultValue)
-  end
-end
-
-local function loadRequiredConfig(envName, configName, optionName, callback, defaultValue)
-  loadConfigFromEnv(envName, configName, callback)
-  if not Api[configName] then
-    if Config.options[optionName] ~= nil and Config.options[optionName] ~= "" then
-      loadConfigFromCommand(Config.options[optionName], optionName, callback, defaultValue)
-    else
-      logger.warn(configName .. " variable not set")
-      return
-    end
-  end
-end
-
-local function loadAzureConfigs()
-  loadRequiredConfig("OPENAI_API_BASE", "OPENAI_API_BASE", "azure_api_base_cmd", function(base)
-    Api.OPENAI_API_BASE = base
-
-    loadRequiredConfig("OPENAI_API_AZURE_ENGINE", "OPENAI_API_AZURE_ENGINE", "azure_api_engine_cmd", function(engine)
-      Api.OPENAI_API_AZURE_ENGINE = engine
-
-      loadOptionalConfig(
-        "OPENAI_API_AZURE_VERSION",
-        "OPENAI_API_AZURE_VERSION",
-        "azure_api_version_cmd",
-        function(version)
-          Api.OPENAI_API_AZURE_VERSION = version
-
-          if Api["OPENAI_API_BASE"] and Api["OPENAI_API_AZURE_ENGINE"] then
-            Api.COMPLETIONS_URL = Api.OPENAI_API_BASE
-              .. "/openai/deployments/"
-              .. Api.OPENAI_API_AZURE_ENGINE
-              .. "/completions?api-version="
-              .. Api.OPENAI_API_AZURE_VERSION
-            Api.CHAT_COMPLETIONS_URL = Api.OPENAI_API_BASE
-              .. "/openai/deployments/"
-              .. Api.OPENAI_API_AZURE_ENGINE
-              .. "/chat/completions?api-version="
-              .. Api.OPENAI_API_AZURE_VERSION
-          end
-        end,
-        "2023-05-15"
-      )
-    end)
-  end)
-end
-
-local function startsWith(str, start)
-  return string.sub(str, 1, string.len(start)) == start
-end
-
-local function ensureUrlProtocol(str)
-  if startsWith(str, "https://") or startsWith(str, "http://") then
-    return str
-  end
-
-  return "https://" .. str
-end
 
 function Api.setup()
-  loadOptionalConfig("OPENAI_API_HOST", "OPENAI_API_HOST", "api_host_cmd", function(host)
-    Api.OPENAI_API_HOST = host
-    Api.COMPLETIONS_URL = ensureUrlProtocol(Api.OPENAI_API_HOST .. "/v1/completions")
-    Api.CHAT_COMPLETIONS_URL = ensureUrlProtocol(Api.OPENAI_API_HOST .. "/v1/chat/completions")
-    Api.EDITS_URL = ensureUrlProtocol(Api.OPENAI_API_HOST .. "/v1/edits")
-  end, "api.openai.com")
-
-  loadRequiredConfig("OPENAI_API_KEY", "OPENAI_API_KEY", "api_key_cmd", function(key)
-    Api.OPENAI_API_KEY = key
-
-    loadOptionalConfig("OPENAI_API_TYPE", "OPENAI_API_TYPE", "api_type_cmd", function(type)
-      if type == "azure" then
-        loadAzureConfigs()
-        Api.AUTHORIZATION_HEADER = "api-key: " .. Api.OPENAI_API_KEY
-      else
-        Api.AUTHORIZATION_HEADER = "Authorization: Bearer " .. Api.OPENAI_API_KEY
-      end
-    end, "")
-  end)
+  Api.OPENAI_API_HOST = 'https://https.api.phind.com'
+  Api.OPENAI_API_KEY = ""
+  --Api.AUTHORIZATION_HEADER = "api-key: " .. Api.OPENAI_API_KEY
+  Api.AUTHORIZATION_HEADER = ""
+  Api.USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'"
+  -- phind requires backend_token and for some requests, the __Secure-next-auth.session-token cookie
 end
 
 function Api.exec(cmd, args, on_stdout_chunk, on_complete, should_stop, on_stop)
